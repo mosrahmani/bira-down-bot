@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from mutagen.id3 import APIC, COMM, TALB, TIT2, TPE1, ID3, ID3NoHeaderError
 from telegram import Update
 from telegram.constants import ChatAction
-from telegram.error import TelegramError
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -41,8 +41,8 @@ VIDEO_MAX_HEIGHT = max(144, int(os.getenv("VIDEO_MAX_HEIGHT", "720")))
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "").strip()
 TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").strip().rstrip("/")
 TELEGRAM_RELAY_SECRET = os.getenv("TELEGRAM_RELAY_SECRET", "").strip()
-TELEGRAM_POLL_TIMEOUT = max(0, int(os.getenv("TELEGRAM_POLL_TIMEOUT", "3")))
-TELEGRAM_POLL_INTERVAL = max(0.0, float(os.getenv("TELEGRAM_POLL_INTERVAL", "0.25")))
+TELEGRAM_POLL_TIMEOUT = max(0, int(os.getenv("TELEGRAM_POLL_TIMEOUT", "0")))
+TELEGRAM_POLL_INTERVAL = max(0.25, float(os.getenv("TELEGRAM_POLL_INTERVAL", "1.5")))
 TELEGRAM_CONNECTION_POOL_SIZE = max(8, int(os.getenv("TELEGRAM_CONNECTION_POOL_SIZE", "8")))
 SUNO_API_BASE = "https://studio-api-prod.suno.com"
 SEM = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")))
@@ -343,11 +343,18 @@ def safe_filename(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-def telegram_request(relay_secret: str = "") -> HTTPXRequest:
+def telegram_request(relay_secret: str = "", *, keepalive: bool = True) -> HTTPXRequest:
     """Create a Telegram HTTP client authenticated to the private relay."""
-    httpx_kwargs = None
+    httpx_kwargs = {}
     if relay_secret:
-        httpx_kwargs = {"headers": {"X-Bira-Relay-Secret": relay_secret}}
+        httpx_kwargs["headers"] = {"X-Bira-Relay-Secret": relay_secret}
+    if not keepalive:
+        # Cloudflare or an intermediate network may silently expire an idle
+        # HTTP/1.1 connection. getUpdates is cheap enough to use a fresh one.
+        httpx_kwargs["limits"] = httpx.Limits(
+            max_connections=2,
+            max_keepalive_connections=0,
+        )
     return HTTPXRequest(
         connection_pool_size=TELEGRAM_CONNECTION_POOL_SIZE,
         connect_timeout=REQUEST_TIMEOUT,
@@ -406,6 +413,17 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send a public link from Suno, YouTube, or Instagram. "
         "Suno links return a tagged MP3; YouTube and Instagram links return an MP4 video."
+    )
+
+
+async def handle_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Keep transient relay failures concise; the polling loop retries them."""
+    if isinstance(ctx.error, NetworkError):
+        log.warning("Temporary Telegram relay error; polling will retry: %s", ctx.error)
+        return
+    log.error(
+        "Unhandled Telegram update error",
+        exc_info=(type(ctx.error), ctx.error, ctx.error.__traceback__),
     )
 
 
@@ -489,7 +507,7 @@ def main() -> None:
     if not TELEGRAM_RELAY_URL or not TELEGRAM_RELAY_SECRET:
         raise SystemExit("TELEGRAM_RELAY_URL and TELEGRAM_RELAY_SECRET are required")
     request = telegram_request(TELEGRAM_RELAY_SECRET)
-    updates_request = telegram_request(TELEGRAM_RELAY_SECRET)
+    updates_request = telegram_request(TELEGRAM_RELAY_SECRET, keepalive=False)
     builder = (
         Application.builder()
         .token(relay_token(bot_id))
@@ -501,6 +519,7 @@ def main() -> None:
     app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_error_handler(handle_error)
     log.info(
         "Starting Telegram polling through relay (timeout=%ss, interval=%ss)",
         TELEGRAM_POLL_TIMEOUT,

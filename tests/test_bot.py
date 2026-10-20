@@ -114,6 +114,11 @@ class LinkRoutingTests(unittest.TestCase):
         request = bot.telegram_request("relay-secret")
         self.assertEqual(request._client.headers["x-bira-relay-secret"], "relay-secret")
 
+    def test_updates_request_disables_stale_keepalive_connections(self):
+        request = bot.telegram_request("relay-secret", keepalive=False)
+        pool = request._client._transport._pool
+        self.assertEqual(pool._max_keepalive_connections, 0)
+
     def test_relay_token_preserves_only_bot_id(self):
         result = bot.relay_token("123456")
         self.assertTrue(result.startswith("123456:"))
