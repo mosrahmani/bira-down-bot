@@ -1,0 +1,15 @@
+services:
+  biradownbot:
+    build:
+      context: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
