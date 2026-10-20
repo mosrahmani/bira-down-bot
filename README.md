@@ -17,7 +17,8 @@ file exceeds Telegram's bot upload limit.
 ## Requirements
 
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- A server that can reach Telegram, Suno, YouTube, and Instagram
+- A Cloudflare account for the private Telegram relay Worker
+- A server that can reach the Worker, Suno, YouTube, and Instagram
 - Docker Engine + Docker Compose (recommended), or Python 3.10+ and FFmpeg
 
 ## Create the Telegram bot
@@ -27,7 +28,41 @@ file exceeds Telegram's bot upload limit.
 3. Copy the token. Never commit or share it.
 4. Optionally configure `/setdescription`, `/setabouttext`, and `/setuserpic`.
 
-## Deploy with Docker Compose (recommended)
+## Deploy the Cloudflare Telegram relay
+
+The Worker is a private, authenticated relay; it is not an open proxy. The real
+BotFather token is stored only as a Cloudflare secret and is never sent in a
+request URL or stored on the application server.
+
+```bash
+cd cloudflare-worker
+npm install
+npx wrangler login
+npx wrangler secret put BOT_TOKEN
+```
+
+Paste the full BotFather token when prompted. Generate a separate relay secret,
+save it in your password manager, and add it to the Worker:
+
+```bash
+openssl rand -hex 32
+npx wrangler secret put RELAY_SECRET
+npm run deploy
+```
+
+Copy the deployed `https://...workers.dev` URL. An unauthenticated health check
+must return `401`:
+
+```bash
+curl -i https://YOUR-WORKER.workers.dev/
+```
+
+Do not put either secret in `wrangler.jsonc`, Git, build arguments, or command
+line URLs. Worker observability is disabled so Telegram subrequest URLs containing
+the token are not retained in Worker logs. Cloudflare streams request and
+response bodies; the Worker does not buffer uploaded MP3/MP4 files in memory.
+
+## Deploy BiraDownBot with Docker Compose
 
 On a Linux VPS:
 
@@ -40,11 +75,16 @@ docker compose up -d --build
 docker compose logs -f biradownbot
 ```
 
-Set at least this value in `.env`:
+Set these values in `.env`:
 
 ```dotenv
-BOT_TOKEN=123456789:replace_with_your_real_token
+TELEGRAM_BOT_ID=123456789
+TELEGRAM_RELAY_URL=https://YOUR-WORKER.workers.dev
+TELEGRAM_RELAY_SECRET=the_same_random_relay_secret
 ```
+
+`TELEGRAM_BOT_ID` is only the numeric part before `:` in the BotFather token.
+The full token must not be copied to this server.
 
 The image installs FFmpeg, runs as a non-root user, uses a read-only filesystem,
 and gives downloads a temporary in-memory `/tmp`. No port or reverse proxy is
@@ -149,29 +189,28 @@ sudo journalctl -u biradownbot -f
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `BOT_TOKEN` | yes | - | Telegram token from @BotFather |
+| `TELEGRAM_BOT_ID` | yes | - | Numeric part before `:` in the BotFather token |
+| `TELEGRAM_RELAY_URL` | yes | - | HTTPS URL of the deployed private Cloudflare Worker |
+| `TELEGRAM_RELAY_SECRET` | yes | - | Random shared secret also stored in the Worker |
 | `LOG_LEVEL` | no | `INFO` | Python log level |
 | `REQUEST_TIMEOUT` | no | `60` | HTTP and Telegram upload timeout in seconds |
 | `MAX_CONCURRENT_DOWNLOADS` | no | `4` | Maximum concurrent user jobs |
 | `MAX_LINKS_PER_MESSAGE` | no | `3` | Maximum links handled from one message |
 | `AUDIO_BITRATE` | no | `192k` | MP3 bitrate used for M4A/Opus fallback |
 | `VIDEO_MAX_HEIGHT` | no | `720` | Maximum preferred YouTube/Instagram video height |
-| `TELEGRAM_PROXY_URL` | no | empty | HTTP/SOCKS5 proxy used only for Telegram API and long polling |
 | `YTDLP_COOKIES_FILE` | no | empty | Netscape cookie file for media that legitimately requires your account |
 
-### Telegram proxy for restricted networks
+### How the Telegram relay works
 
-If the server cannot connect directly to `api.telegram.org`, put an HTTP or
-SOCKS5 proxy URL in `.env`:
+Both normal Bot API calls and long polling are sent to the Worker over HTTPS.
+The application authenticates with `TELEGRAM_RELAY_SECRET` and uses a non-secret
+placeholder token in request URLs. The Worker validates the secret, inserts the
+real `BOT_TOKEN` from Cloudflare Secrets, forwards the request to Telegram, and
+streams Telegram's response back to the bot.
 
-```dotenv
-TELEGRAM_PROXY_URL=socks5://username:password@proxy-host:1080
-```
-
-For an HTTP proxy use `http://username:password@proxy-host:port`. If the
-password contains characters meaningful to URLs (such as `@`, `:` or `/`), URL
-encode them. The proxy is applied to normal Bot API requests and the separate
-long-polling connection. BiraDownBot retries Telegram initialization indefinitely
+The Worker accepts only authenticated `GET`/`POST` requests matching Telegram
+API or file paths. It strips the relay secret and client forwarding headers
+before contacting Telegram. BiraDownBot retries initialization indefinitely
 instead of entering a container restart loop during a temporary outage.
 
 ### Optional cookies for restricted media
@@ -229,13 +268,14 @@ docker run --rm \
 
 ## Troubleshooting
 
-- **`BOT_TOKEN is required`:** create `.env` from `.env.example` and set a real
-  token.
+- **Missing relay configuration:** create `.env` from `.env.example` and set the
+  bot id, deployed Worker URL, and matching relay secret.
 - **Telegram `Conflict`:** another process/container is polling with the same
   token. Stop the other instance.
-- **`httpx.ConnectError: All connection attempts failed`:** the server cannot
-  reach Telegram. Set `TELEGRAM_PROXY_URL` to a reachable HTTP or SOCKS5 proxy,
-  then recreate the container with `docker compose up -d --force-recreate`.
+- **Worker returns `401`:** `TELEGRAM_RELAY_SECRET` does not match the Worker's
+  `RELAY_SECRET` secret.
+- **`httpx.ConnectError: All connection attempts failed`:** verify the Worker URL
+  is reachable from the server, then recreate the container.
 - **`Audio not found`:** the song is private, deleted, still generating, or no
   public media URL is present on its page.
 - **`Video download failed`:** the post is private, deleted, login/age/region
@@ -252,4 +292,3 @@ docker run --rm \
 The bot processes temporary media under `/tmp` and removes it after each job.
 Only download media you own or are authorized to download, and follow each
 platform's terms and the creator's rights.
-# bira-down-bot

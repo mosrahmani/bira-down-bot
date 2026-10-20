@@ -36,7 +36,8 @@ MAX_LINKS = int(os.getenv("MAX_LINKS_PER_MESSAGE", "3"))
 AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "192k")
 VIDEO_MAX_HEIGHT = max(144, int(os.getenv("VIDEO_MAX_HEIGHT", "720")))
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "").strip()
-TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "").strip()
+TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").strip().rstrip("/")
+TELEGRAM_RELAY_SECRET = os.getenv("TELEGRAM_RELAY_SECRET", "").strip()
 SUNO_API_BASE = "https://studio-api-prod.suno.com"
 SEM = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")))
 
@@ -336,15 +337,25 @@ def safe_filename(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-def telegram_request(proxy_url: str = "") -> HTTPXRequest:
-    """Create a Telegram HTTP client, optionally routed through a proxy."""
+def telegram_request(relay_secret: str = "") -> HTTPXRequest:
+    """Create a Telegram HTTP client authenticated to the private relay."""
+    httpx_kwargs = None
+    if relay_secret:
+        httpx_kwargs = {"headers": {"X-Bira-Relay-Secret": relay_secret}}
     return HTTPXRequest(
-        proxy=proxy_url or None,
         connect_timeout=REQUEST_TIMEOUT,
         read_timeout=REQUEST_TIMEOUT,
         write_timeout=REQUEST_TIMEOUT,
         media_write_timeout=REQUEST_TIMEOUT,
+        httpx_kwargs=httpx_kwargs,
     )
+
+
+def relay_token(bot_id: str) -> str:
+    """Build a non-secret placeholder token for python-telegram-bot URL generation."""
+    if not bot_id.isdigit():
+        raise ValueError("TELEGRAM_BOT_ID must be numeric")
+    return f"{bot_id}:BiraDownBotRelayToken000000000000000"
 
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -411,14 +422,21 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def main() -> None:
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise SystemExit("BOT_TOKEN is required; copy .env.example to .env and set it")
-    builder = Application.builder().token(token)
-    if TELEGRAM_PROXY_URL:
-        # Telegram API calls and the separate long-polling client both need the proxy.
-        builder = builder.request(telegram_request(TELEGRAM_PROXY_URL))
-        builder = builder.get_updates_request(telegram_request(TELEGRAM_PROXY_URL))
+    bot_id = os.getenv("TELEGRAM_BOT_ID", "").strip()
+    if not bot_id:
+        raise SystemExit("TELEGRAM_BOT_ID is required; it is the numeric part before ':' in the bot token")
+    if not TELEGRAM_RELAY_URL or not TELEGRAM_RELAY_SECRET:
+        raise SystemExit("TELEGRAM_RELAY_URL and TELEGRAM_RELAY_SECRET are required")
+    request = telegram_request(TELEGRAM_RELAY_SECRET)
+    updates_request = telegram_request(TELEGRAM_RELAY_SECRET)
+    builder = (
+        Application.builder()
+        .token(relay_token(bot_id))
+        .base_url(f"{TELEGRAM_RELAY_URL}/api/bot")
+        .base_file_url(f"{TELEGRAM_RELAY_URL}/file/bot")
+        .request(request)
+        .get_updates_request(updates_request)
+    )
     app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))

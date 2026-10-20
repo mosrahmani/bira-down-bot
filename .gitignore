@@ -6,3 +6,6 @@ __pycache__/
 venv/
 cookies.txt
 *.cookies.txt
+node_modules/
+.wrangler/
+.dev.vars*

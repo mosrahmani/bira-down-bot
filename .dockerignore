@@ -10,3 +10,4 @@ tests/
 README.md
 cookies.txt
 *.cookies.txt
+cloudflare-worker/

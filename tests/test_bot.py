@@ -106,11 +106,17 @@ class LinkRoutingTests(unittest.TestCase):
     def test_safe_filename_removes_path_characters(self):
         self.assertEqual(bot.safe_filename('bad/name:*?"', "fallback"), "bad_name")
 
-    def test_builds_http_and_socks_telegram_requests(self):
-        http_request = bot.telegram_request("http://127.0.0.1:8080")
-        socks_request = bot.telegram_request("socks5://127.0.0.1:1080")
-        self.assertIsNotNone(http_request)
-        self.assertIsNotNone(socks_request)
+    def test_builds_authenticated_relay_request(self):
+        request = bot.telegram_request("relay-secret")
+        self.assertEqual(request._client.headers["x-bira-relay-secret"], "relay-secret")
+
+    def test_relay_token_preserves_only_bot_id(self):
+        result = bot.relay_token("123456")
+        self.assertTrue(result.startswith("123456:"))
+
+    def test_relay_token_rejects_invalid_bot_token(self):
+        with self.assertRaises(ValueError):
+            bot.relay_token("invalid")
 
 
 if __name__ == "__main__":
