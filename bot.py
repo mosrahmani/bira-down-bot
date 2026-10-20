@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from mutagen.id3 import APIC, COMM, TALB, TIT2, TPE1, ID3, ID3NoHeaderError
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.request import HTTPXRequest
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 log = logging.getLogger("biradownbot")
@@ -35,6 +36,7 @@ MAX_LINKS = int(os.getenv("MAX_LINKS_PER_MESSAGE", "3"))
 AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "192k")
 VIDEO_MAX_HEIGHT = max(144, int(os.getenv("VIDEO_MAX_HEIGHT", "720")))
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "").strip()
+TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "").strip()
 SUNO_API_BASE = "https://studio-api-prod.suno.com"
 SEM = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")))
 
@@ -334,6 +336,17 @@ def safe_filename(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
+def telegram_request(proxy_url: str = "") -> HTTPXRequest:
+    """Create a Telegram HTTP client, optionally routed through a proxy."""
+    return HTTPXRequest(
+        proxy=proxy_url or None,
+        connect_timeout=REQUEST_TIMEOUT,
+        read_timeout=REQUEST_TIMEOUT,
+        write_timeout=REQUEST_TIMEOUT,
+        media_write_timeout=REQUEST_TIMEOUT,
+    )
+
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send a public link from Suno, YouTube, or Instagram. "
@@ -401,10 +414,15 @@ def main() -> None:
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise SystemExit("BOT_TOKEN is required; copy .env.example to .env and set it")
-    app = Application.builder().token(token).build()
+    builder = Application.builder().token(token)
+    if TELEGRAM_PROXY_URL:
+        # Telegram API calls and the separate long-polling client both need the proxy.
+        builder = builder.request(telegram_request(TELEGRAM_PROXY_URL))
+        builder = builder.get_updates_request(telegram_request(TELEGRAM_PROXY_URL))
+    app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":

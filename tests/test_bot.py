@@ -106,6 +106,12 @@ class LinkRoutingTests(unittest.TestCase):
     def test_safe_filename_removes_path_characters(self):
         self.assertEqual(bot.safe_filename('bad/name:*?"', "fallback"), "bad_name")
 
+    def test_builds_http_and_socks_telegram_requests(self):
+        http_request = bot.telegram_request("http://127.0.0.1:8080")
+        socks_request = bot.telegram_request("socks5://127.0.0.1:1080")
+        self.assertIsNotNone(http_request)
+        self.assertIsNotNone(socks_request)
+
 
 if __name__ == "__main__":
     unittest.main()

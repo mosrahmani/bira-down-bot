@@ -156,7 +156,23 @@ sudo journalctl -u biradownbot -f
 | `MAX_LINKS_PER_MESSAGE` | no | `3` | Maximum links handled from one message |
 | `AUDIO_BITRATE` | no | `192k` | MP3 bitrate used for M4A/Opus fallback |
 | `VIDEO_MAX_HEIGHT` | no | `720` | Maximum preferred YouTube/Instagram video height |
+| `TELEGRAM_PROXY_URL` | no | empty | HTTP/SOCKS5 proxy used only for Telegram API and long polling |
 | `YTDLP_COOKIES_FILE` | no | empty | Netscape cookie file for media that legitimately requires your account |
+
+### Telegram proxy for restricted networks
+
+If the server cannot connect directly to `api.telegram.org`, put an HTTP or
+SOCKS5 proxy URL in `.env`:
+
+```dotenv
+TELEGRAM_PROXY_URL=socks5://username:password@proxy-host:1080
+```
+
+For an HTTP proxy use `http://username:password@proxy-host:port`. If the
+password contains characters meaningful to URLs (such as `@`, `:` or `/`), URL
+encode them. The proxy is applied to normal Bot API requests and the separate
+long-polling connection. BiraDownBot retries Telegram initialization indefinitely
+instead of entering a container restart loop during a temporary outage.
 
 ### Optional cookies for restricted media
 
@@ -217,6 +233,9 @@ docker run --rm \
   token.
 - **Telegram `Conflict`:** another process/container is polling with the same
   token. Stop the other instance.
+- **`httpx.ConnectError: All connection attempts failed`:** the server cannot
+  reach Telegram. Set `TELEGRAM_PROXY_URL` to a reachable HTTP or SOCKS5 proxy,
+  then recreate the container with `docker compose up -d --force-recreate`.
 - **`Audio not found`:** the song is private, deleted, still generating, or no
   public media URL is present on its page.
 - **`Video download failed`:** the post is private, deleted, login/age/region
