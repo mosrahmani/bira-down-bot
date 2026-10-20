@@ -5,6 +5,8 @@ A Telegram bot that automatically detects supported links:
 - Public Suno song -> tagged MP3 with title, creator, and cover art
 - Public YouTube video/Short -> MP4 video
 - Public Instagram post/Reel/video -> MP4 video
+- Live download/upload status, native Telegram activity indicators, and automatic
+  cleanup of progress messages
 
 Suno does not always expose the old `cdn1.suno.ai/<id>.mp3` download anymore.
 The bot first tries that path; when it is unavailable, it reads the current
@@ -194,6 +196,7 @@ sudo journalctl -u biradownbot -f
 | `TELEGRAM_RELAY_SECRET` | yes | - | Random shared secret also stored in the Worker |
 | `TELEGRAM_POLL_TIMEOUT` | no | `3` | Telegram getUpdates hold time; keep short when using the relay |
 | `TELEGRAM_POLL_INTERVAL` | no | `0.25` | Delay between getUpdates requests in seconds |
+| `TELEGRAM_CONNECTION_POOL_SIZE` | no | `8` | Concurrent Telegram connections for uploads and activity updates |
 | `LOG_LEVEL` | no | `INFO` | Python log level |
 | `REQUEST_TIMEOUT` | no | `60` | HTTP and Telegram upload timeout in seconds |
 | `MAX_CONCURRENT_DOWNLOADS` | no | `4` | Maximum concurrent user jobs |

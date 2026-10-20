@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import tempfile
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,6 +19,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from mutagen.id3 import APIC, COMM, TALB, TIT2, TPE1, ID3, ID3NoHeaderError
 from telegram import Update
+from telegram.constants import ChatAction
+from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -40,6 +43,7 @@ TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").strip().rstrip("/")
 TELEGRAM_RELAY_SECRET = os.getenv("TELEGRAM_RELAY_SECRET", "").strip()
 TELEGRAM_POLL_TIMEOUT = max(0, int(os.getenv("TELEGRAM_POLL_TIMEOUT", "3")))
 TELEGRAM_POLL_INTERVAL = max(0.0, float(os.getenv("TELEGRAM_POLL_INTERVAL", "0.25")))
+TELEGRAM_CONNECTION_POOL_SIZE = max(8, int(os.getenv("TELEGRAM_CONNECTION_POOL_SIZE", "8")))
 SUNO_API_BASE = "https://studio-api-prod.suno.com"
 SEM = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")))
 
@@ -345,6 +349,7 @@ def telegram_request(relay_secret: str = "") -> HTTPXRequest:
     if relay_secret:
         httpx_kwargs = {"headers": {"X-Bira-Relay-Secret": relay_secret}}
     return HTTPXRequest(
+        connection_pool_size=TELEGRAM_CONNECTION_POOL_SIZE,
         connect_timeout=REQUEST_TIMEOUT,
         read_timeout=REQUEST_TIMEOUT,
         write_timeout=REQUEST_TIMEOUT,
@@ -360,6 +365,43 @@ def relay_token(bot_id: str) -> str:
     return f"{bot_id}:BiraDownBotRelayToken000000000000000"
 
 
+async def update_status(status, text: str) -> None:
+    """Best-effort progress updates must never interrupt a download."""
+    try:
+        await status.edit_text(text)
+    except TelegramError:
+        log.debug("could not update progress message", exc_info=True)
+
+
+@asynccontextmanager
+async def show_chat_action(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, action: str):
+    """Keep Telegram's native activity indicator alive during slow operations."""
+    async def repeat_action() -> None:
+        while True:
+            try:
+                await ctx.bot.send_chat_action(chat_id=chat_id, action=action)
+            except TelegramError:
+                log.debug("could not send chat action", exc_info=True)
+            await asyncio.sleep(4)
+
+    task = asyncio.create_task(repeat_action())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+def progress_text(stage: str, kind: str, index: int, total: int) -> str:
+    """Create a compact progress label for one or several links."""
+    media = "audio" if kind == "suno" else "video"
+    position = f" ({index}/{total})" if total > 1 else ""
+    if stage == "upload":
+        return f"📤 Uploading {media}…{position}"
+    return f"⏳ Downloading {media}…{position}"
+
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send a public link from Suno, YouTube, or Instagram. "
@@ -373,39 +415,55 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Please send a valid Suno, YouTube, or Instagram link.")
         return
 
-    status = await update.message.reply_text("Fetching…")
+    selected_urls = urls[:MAX_LINKS]
+    status = await update.message.reply_text(
+        progress_text("download", selected_urls[0][1], 1, len(selected_urls))
+    )
     try:
         async with SEM, httpx.AsyncClient(headers=HEADERS, timeout=REQUEST_TIMEOUT) as client:
-            for url, kind in urls[:MAX_LINKS]:
+            for index, (url, kind) in enumerate(selected_urls, start=1):
                 try:
+                    await update_status(
+                        status, progress_text("download", kind, index, len(selected_urls))
+                    )
                     with tempfile.TemporaryDirectory(prefix="biradownbot-") as temp_dir:
                         directory = Path(temp_dir)
-                        if kind == "suno":
-                            song_id = await resolve_song_id(client, url)
-                            if not song_id:
-                                await update.message.reply_text(f"Couldn't find a song ID in {url}")
-                                continue
-                            path, meta, _cover = await prepare_mp3(client, song_id, directory)
-                            name = safe_filename(meta["title"], song_id)
+                        async with show_chat_action(ctx, update.effective_chat.id, ChatAction.TYPING):
+                            if kind == "suno":
+                                song_id = await resolve_song_id(client, url)
+                                if not song_id:
+                                    await update.message.reply_text(f"Couldn't find a song ID in {url}")
+                                    continue
+                                path, meta, _cover = await prepare_mp3(client, song_id, directory)
+                                name = safe_filename(meta["title"], song_id)
+                            else:
+                                path, meta = await prepare_video(url, directory)
+                                fallback = str(meta.get("id") or kind)
+                                name = safe_filename(str(meta.get("title") or "video"), fallback)
+
+                        await update_status(
+                            status, progress_text("upload", kind, index, len(selected_urls))
+                        )
+                        upload_action = (
+                            ChatAction.UPLOAD_AUDIO if kind == "suno" else ChatAction.UPLOAD_VIDEO
+                        )
+                        async with show_chat_action(ctx, update.effective_chat.id, upload_action):
                             with path.open("rb") as media_file:
-                                await update.message.reply_audio(
-                                    media_file, filename=f"{name}.mp3", title=meta["title"],
-                                    performer=meta["artist"], read_timeout=REQUEST_TIMEOUT,
-                                    write_timeout=REQUEST_TIMEOUT,
-                                )
-                        else:
-                            path, meta = await prepare_video(url, directory)
-                            fallback = str(meta.get("id") or kind)
-                            name = safe_filename(str(meta.get("title") or "video"), fallback)
-                            duration = meta.get("duration")
-                            with path.open("rb") as media_file:
-                                await update.message.reply_video(
-                                    media_file, filename=f"{name}.mp4",
-                                    caption=str(meta.get("title") or "")[:1024] or None,
-                                    duration=int(duration) if duration else None,
-                                    supports_streaming=True, read_timeout=REQUEST_TIMEOUT,
-                                    write_timeout=REQUEST_TIMEOUT,
-                                )
+                                if kind == "suno":
+                                    await update.message.reply_audio(
+                                        media_file, filename=f"{name}.mp3", title=meta["title"],
+                                        performer=meta["artist"], read_timeout=REQUEST_TIMEOUT,
+                                        write_timeout=REQUEST_TIMEOUT,
+                                    )
+                                else:
+                                    duration = meta.get("duration")
+                                    await update.message.reply_video(
+                                        media_file, filename=f"{name}.mp4",
+                                        caption=str(meta.get("title") or "")[:1024] or None,
+                                        duration=int(duration) if duration else None,
+                                        supports_streaming=True, read_timeout=REQUEST_TIMEOUT,
+                                        write_timeout=REQUEST_TIMEOUT,
+                                    )
                 except DownloadTooLarge:
                     await update.message.reply_text("File is too large for Telegram bots (50 MB).")
                 except FileNotFoundError:
@@ -420,7 +478,8 @@ async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     log.exception("download failed")
                     await update.message.reply_text("Something went wrong, try again later.")
     finally:
-        await status.delete()
+        with suppress(TelegramError):
+            await status.delete()
 
 
 def main() -> None:

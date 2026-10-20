@@ -106,6 +106,10 @@ class LinkRoutingTests(unittest.TestCase):
     def test_safe_filename_removes_path_characters(self):
         self.assertEqual(bot.safe_filename('bad/name:*?"', "fallback"), "bad_name")
 
+    def test_progress_labels_cover_download_upload_and_multiple_links(self):
+        self.assertEqual(bot.progress_text("download", "suno", 1, 1), "⏳ Downloading audio…")
+        self.assertEqual(bot.progress_text("upload", "youtube", 2, 3), "📤 Uploading video… (2/3)")
+
     def test_builds_authenticated_relay_request(self):
         request = bot.telegram_request("relay-secret")
         self.assertEqual(request._client.headers["x-bira-relay-secret"], "relay-secret")
