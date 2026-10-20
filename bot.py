@@ -38,6 +38,8 @@ VIDEO_MAX_HEIGHT = max(144, int(os.getenv("VIDEO_MAX_HEIGHT", "720")))
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "").strip()
 TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").strip().rstrip("/")
 TELEGRAM_RELAY_SECRET = os.getenv("TELEGRAM_RELAY_SECRET", "").strip()
+TELEGRAM_POLL_TIMEOUT = max(0, int(os.getenv("TELEGRAM_POLL_TIMEOUT", "3")))
+TELEGRAM_POLL_INTERVAL = max(0.0, float(os.getenv("TELEGRAM_POLL_INTERVAL", "0.25")))
 SUNO_API_BASE = "https://studio-api-prod.suno.com"
 SEM = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")))
 
@@ -440,7 +442,17 @@ def main() -> None:
     app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
+    log.info(
+        "Starting Telegram polling through relay (timeout=%ss, interval=%ss)",
+        TELEGRAM_POLL_TIMEOUT,
+        TELEGRAM_POLL_INTERVAL,
+    )
+    app.run_polling(
+        drop_pending_updates=True,
+        bootstrap_retries=-1,
+        timeout=TELEGRAM_POLL_TIMEOUT,
+        poll_interval=TELEGRAM_POLL_INTERVAL,
+    )
 
 
 if __name__ == "__main__":

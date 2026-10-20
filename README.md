@@ -192,6 +192,8 @@ sudo journalctl -u biradownbot -f
 | `TELEGRAM_BOT_ID` | yes | - | Numeric part before `:` in the BotFather token |
 | `TELEGRAM_RELAY_URL` | yes | - | HTTPS URL of the deployed private Cloudflare Worker |
 | `TELEGRAM_RELAY_SECRET` | yes | - | Random shared secret also stored in the Worker |
+| `TELEGRAM_POLL_TIMEOUT` | no | `3` | Telegram getUpdates hold time; keep short when using the relay |
+| `TELEGRAM_POLL_INTERVAL` | no | `0.25` | Delay between getUpdates requests in seconds |
 | `LOG_LEVEL` | no | `INFO` | Python log level |
 | `REQUEST_TIMEOUT` | no | `60` | HTTP and Telegram upload timeout in seconds |
 | `MAX_CONCURRENT_DOWNLOADS` | no | `4` | Maximum concurrent user jobs |
@@ -202,7 +204,9 @@ sudo journalctl -u biradownbot -f
 
 ### How the Telegram relay works
 
-Both normal Bot API calls and long polling are sent to the Worker over HTTPS.
+Both normal Bot API calls and polling are sent to the Worker over HTTPS. Polling
+uses short-lived requests by default because some Cloudflare/network paths close
+long-held HTTP connections before Telegram responds.
 The application authenticates with `TELEGRAM_RELAY_SECRET` and uses a non-secret
 placeholder token in request URLs. The Worker validates the secret, inserts the
 real `BOT_TOKEN` from Cloudflare Secrets, forwards the request to Telegram, and
@@ -276,6 +280,11 @@ docker run --rm \
   `RELAY_SECRET` secret.
 - **`httpx.ConnectError: All connection attempts failed`:** verify the Worker URL
   is reachable from the server, then recreate the container.
+- **`RemoteProtocolError: Server disconnected without sending a response` in
+  `getUpdates`:** update to the latest version and keep
+  `TELEGRAM_POLL_TIMEOUT=3` and `TELEGRAM_POLL_INTERVAL=0.25` in `.env`. This
+  error happens before the Suno handler receives the message; it is not a Suno
+  download failure.
 - **`Audio not found`:** the song is private, deleted, still generating, or no
   public media URL is present on its page.
 - **`Video download failed`:** the post is private, deleted, login/age/region
