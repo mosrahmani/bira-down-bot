@@ -50,6 +50,15 @@ The image installs FFmpeg, runs as a non-root user, uses a read-only filesystem,
 and gives downloads a temporary in-memory `/tmp`. No port or reverse proxy is
 needed because the bot uses Telegram long polling.
 
+The Dockerfile uses ArvanCloud's Iranian Docker Hub mirror by default to avoid
+Docker Hub connectivity problems inside Iran. To use the official registry on
+a server outside Iran, override the base image when building:
+
+```bash
+docker compose build --build-arg PYTHON_IMAGE=python:3.12-slim
+docker compose up -d
+```
+
 Useful deployment commands:
 
 ```bash
