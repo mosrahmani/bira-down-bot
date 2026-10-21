@@ -220,7 +220,8 @@ streams Telegram's response back to the bot.
 The Worker accepts only authenticated `GET`/`POST` requests matching Telegram
 API or file paths. It strips the relay secret and client forwarding headers
 before contacting Telegram. BiraDownBot retries initialization indefinitely
-instead of entering a container restart loop during a temporary outage.
+instead of entering a container restart loop during a temporary outage. Pending
+messages are preserved across container restarts rather than being discarded.
 
 ### Optional cookies for restricted media
 
@@ -290,6 +291,10 @@ docker run --rm \
   `TELEGRAM_POLL_TIMEOUT=0` and `TELEGRAM_POLL_INTERVAL=1.5` in `.env`. This
   error happens before the Suno handler receives the message; it is not a Suno
   download failure. The bot retries transient relay failures automatically.
+- **A sent link produces no response:** first send `/start`, then send the link
+  again after `Application started` appears. Current releases preserve queued
+  messages across restarts and log `Received media request` whenever Telegram
+  delivers a text or caption to the bot.
 - **`Audio not found`:** the song is private, deleted, still generating, or no
   public media URL is present on its page.
 - **`Video download failed`:** the post is private, deleted, login/age/region

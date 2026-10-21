@@ -410,6 +410,7 @@ def progress_text(stage: str, kind: str, index: int, total: int) -> str:
 
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    log.info("Received /start from chat_id=%s update_id=%s", update.effective_chat.id, update.update_id)
     await update.message.reply_text(
         "Send a public link from Suno, YouTube, or Instagram. "
         "Suno links return a tagged MP3; YouTube and Instagram links return an MP4 video."
@@ -428,7 +429,14 @@ async def handle_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    urls = extract_supported_urls(update.message.text or "")
+    message_text = update.message.text or update.message.caption or ""
+    urls = extract_supported_urls(message_text)
+    log.info(
+        "Received media request chat_id=%s update_id=%s supported_links=%s",
+        update.effective_chat.id,
+        update.update_id,
+        len(urls),
+    )
     if not urls:
         await update.message.reply_text("Please send a valid Suno, YouTube, or Instagram link.")
         return
@@ -518,7 +526,7 @@ def main() -> None:
     )
     app = builder.build()
     app.add_handler(CommandHandler(["start", "help"], start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle))
     app.add_error_handler(handle_error)
     log.info(
         "Starting Telegram polling through relay (timeout=%ss, interval=%ss)",
@@ -526,7 +534,8 @@ def main() -> None:
         TELEGRAM_POLL_INTERVAL,
     )
     app.run_polling(
-        drop_pending_updates=True,
+        # Never discard links that arrive while the container is restarting.
+        drop_pending_updates=False,
         bootstrap_retries=-1,
         timeout=TELEGRAM_POLL_TIMEOUT,
         poll_interval=TELEGRAM_POLL_INTERVAL,
