@@ -1,4 +1,6 @@
 .env
+web/node_modules/
+web/.next/
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -15,7 +15,7 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=bot:bot bot.py ./
+COPY --chown=bot:bot bot.py api.py ./
 
 USER bot
 

@@ -7,6 +7,7 @@ A Telegram bot that automatically detects supported links:
 - Public Instagram post/Reel/video -> MP4 video
 - Live download/upload status, native Telegram activity indicators, and automatic
   cleanup of progress messages
+- Minimal English Next.js web app for downloading public Suno songs as tagged MP3 files
 
 Suno does not always expose the old `cdn1.suno.ai/<id>.mp3` download anymore.
 The bot first tries that path; when it is unavailable, it reads the current
@@ -76,6 +77,43 @@ nano .env
 docker compose up -d --build
 docker compose logs -f biradownbot
 ```
+
+The same Compose project also starts the private download API and Next.js web
+app. Open `http://YOUR_SERVER_IP:3000` after the containers become healthy. Set
+`WEB_PORT` in `.env` if port 3000 is already in use:
+
+```dotenv
+WEB_PORT=3000
+WEB_MAX_CONCURRENT_DOWNLOADS=2
+```
+
+Only the Next.js port is published. The Python download API stays private on the
+Compose network and accepts only exact Suno hosts, so arbitrary remote URLs are
+not fetched.
+
+For a public deployment, point a domain to the server and reverse proxy HTTPS to
+`127.0.0.1:3000`. Example Nginx location:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name download.example.com;
+
+    client_max_body_size 1m;
+    proxy_read_timeout 240s;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Use Certbot or your existing reverse proxy to provision the TLS certificate.
+Do not expose port 8000 publicly.
 
 Set these values in `.env`:
 

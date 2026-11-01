@@ -13,3 +13,45 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  download-api:
+    build:
+      context: .
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=192m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: ./web
+    environment:
+      DOWNLOAD_API_URL: http://download-api:8000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      download-api:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
